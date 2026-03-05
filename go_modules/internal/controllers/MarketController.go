@@ -77,7 +77,7 @@ func (mc *MarketController) StartLiveScanner(apiKey string) {
 
 	// 2. Subscribe to the pairs you want to monitor
 	// Note: Finnhub uses broker prefixes like OANDA:EUR_USD or BINANCE:BTCUSDT
-	symbolsToTrack := []string{"OANDA:EUR_USD", "OANDA:GBP_JPY", "OANDA:XAU_USD", "OANDA:AUD_USD"}
+	symbolsToTrack := []string{"OANDA:EUR_USD", "OANDA:GBP_JPY", "OANDA:XAU_USD", "OANDA:AUD_USD","BINANCE:BTCUSDT"}
 	for _, sym := range symbolsToTrack {
 		msg := map[string]string{"type": "subscribe", "symbol": sym}
 		w.WriteJSON(msg)
@@ -110,26 +110,30 @@ func (mc *MarketController) StartLiveScanner(apiKey string) {
 }
 
 func (mc *MarketController) processMarketTicks(msg FinnhubMessage) {
-	mc.mu.Lock()
-	defer mc.mu.Unlock()
+    mc.mu.Lock()
+    defer mc.mu.Unlock()
 
-	for _, trade := range msg.Data {
-		// Clean the symbol name for MT5 (e.g., "OANDA:EUR_USD" -> "EURUSD")
-		cleanSymbol := strings.Replace(trade.S, "OANDA:", "", 1)
-		cleanSymbol = strings.Replace(cleanSymbol, "_", "", 1)
+    for _, trade := range msg.Data {
+        // Clean the symbol name for MT5
+        cleanSymbol := strings.Replace(trade.S, "OANDA:", "", 1)
+        cleanSymbol = strings.Replace(cleanSymbol, "BINANCE:", "", 1) // Clean Binance prefix too
+        cleanSymbol = strings.Replace(cleanSymbol, "_", "", 1)
 
-		// Increment tick volume (basic momentum tracking)
-		mc.tickVolume[cleanSymbol]++
+        // Increment tick volume (basic momentum tracking)
+        mc.tickVolume[cleanSymbol]++
 
-		// Update the trending map
-		// You can make this logic smarter (e.g., only add it if tickVolume > 50 in the last minute)
-		mc.trendingSymbols[cleanSymbol] = models.TrendingSymbol{
-			Symbol:    cleanSymbol,
-			Score:     float64(mc.tickVolume[cleanSymbol]), // Using tick volume as a basic score
-			Session:   "DYNAMIC", 
-			UpdatedAt: time.Now(),
-		}
-	}
+        // Update the trending map
+        mc.trendingSymbols[cleanSymbol] = models.TrendingSymbol{
+            Symbol:    cleanSymbol,
+            Score:     float64(mc.tickVolume[cleanSymbol]),
+            Session:   "DYNAMIC", 
+            UpdatedAt: time.Now(),
+        }
+
+        // // ---> NEW LOGGING HERE <---
+        // log.Printf("[LIVE TICK] %s | Price: %.5f | Current Momentum Score: %d", 
+        //     cleanSymbol, trade.P, int(mc.trendingSymbols[cleanSymbol].Score))
+    }
 }
 
 // decayMomentumScores resets the tick volume every minute so we only track *recent* momentum
@@ -144,4 +148,39 @@ func (mc *MarketController) decayMomentumScores() {
 		mc.mu.Unlock()
 		log.Println("Market momentum scores decayed.")
 	}
+}
+
+// LogTrade handles POST /api/v1/trades/log
+func (mc *MarketController) LogTrade(w http.ResponseWriter, r *http.Request) {
+	// 1. Ensure it's a POST request
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 2. Decode the incoming JSON payload
+	var tradeLog models.TradeLog
+	if err := json.NewDecoder(r.Body).Decode(&tradeLog); err != nil {
+		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		log.Printf("Failed to decode trade log: %v", err)
+		return
+	}
+	defer r.Body.Close()
+
+	// 3. Log the trade to the Go terminal
+	log.Printf("💰 [TRADE EXECUTED] %s | %s | %s | Vol: %.2f | Profit: $%.2f",
+		tradeLog.Timestamp.Format("15:04:05"),
+		tradeLog.Symbol,
+		tradeLog.Operation,
+		tradeLog.Volume,
+		tradeLog.Profit,
+	)
+
+	// 4. Send a success response back to Python
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":  "success",
+		"message": "Trade logged successfully",
+	})
 }

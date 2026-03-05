@@ -19,7 +19,7 @@ func main() {
 	}
 
 	// 2. Fetch the API key
-	apiKey := os.Getenv("FINNHUB_API_KEY")
+	apiKey := os.Getenv("FINN_HUB_API_KEY")
 	if apiKey == "" {
 		log.Fatal("Fatal: FINNHUB_API_KEY is not set in .env file")
 	}
